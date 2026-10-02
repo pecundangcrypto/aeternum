@@ -499,14 +499,26 @@ export async function openPosition({ pool, deploySol, widthPct, skew, dryRun = c
     };
   }
 
-  const action = await openConcentratedPositionWithTickBounds(
-    address(pool),
-    param,
-    range.tickLower,
-    range.tickUpper,
-    { slippageToleranceBps: config.chain.slippageBps },
-  );
-  const signature = await action.callback();
+  // Building and sending can fail after the funding swaps have landed. If the
+  // open never reached the chain, sell the bought legs back to SOL so capital is
+  // not left stranded in tokens. Once a transaction *has* been sent, its outcome
+  // is unknown on a timeout and nothing is unwound — those tokens may be inside a
+  // position that landed.
+  let action;
+  let signature;
+  try {
+    action = await openConcentratedPositionWithTickBounds(
+      address(pool),
+      param,
+      range.tickLower,
+      range.tickUpper,
+      { slippageToleranceBps: config.chain.slippageBps },
+    );
+    signature = await action.callback();
+  } catch (err) {
+    const unwound = await unwindFunding(funding);
+    throw new Error(`Open failed before reaching the chain: ${err.message}. Funding legs ${describeUnwind(unwound)}`);
+  }
   await confirmSignature(signature);
 
   log("chain", `Opened ${meta.pair} position ${action.positionMint} (${signature})`);
@@ -517,6 +529,32 @@ export async function openPosition({ pool, deploySol, widthPct, skew, dryRun = c
     initializationCostLamports: action.initializationCost?.toString?.() ?? null,
     tx: signature,
   };
+}
+
+/** Sell each funding leg bought for an open that never happened back to SOL. */
+async function unwindFunding(funding) {
+  const results = [];
+  for (const leg of funding) {
+    const amountRaw = leg.outAmount != null ? BigInt(leg.outAmount) : 0n;
+    if (amountRaw <= 0n) continue;
+    try {
+      const swap = await executeSwap({ inputMint: leg.mint, outputMint: MINTS.SOL, amountRaw, dryRun: false });
+      results.push({ mint: leg.mint, ok: true, tx: swap.tx });
+      log("chain", `Unwound funding leg ${leg.mint.slice(0, 6)} back to SOL (${swap.tx})`);
+    } catch (err) {
+      results.push({ mint: leg.mint, ok: false, error: err.message });
+      log("chain_error", `Could not unwind funding leg ${leg.mint.slice(0, 6)}: ${err.message} — swap it back manually`);
+    }
+  }
+  return results;
+}
+
+function describeUnwind(results) {
+  if (!results.length) return "— none to unwind.";
+  const failed = results.filter((r) => !r.ok);
+  return failed.length
+    ? `could not all be unwound: ${failed.map((r) => r.mint.slice(0, 6)).join(", ")} still held — swap back manually.`
+    : "were sold back to SOL.";
 }
 
 /**

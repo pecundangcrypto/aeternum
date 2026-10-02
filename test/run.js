@@ -748,6 +748,28 @@ test("swaps are partially signed, so gasless Ultra orders can land", async () =>
   assert(!/[^y]signTransaction\(\[/.test(whirlpool), "no full-sign call may remain on the swap path");
 });
 
+test("the SDK payer is registered, not just the funder", () => {
+  // Every Orca action — open, close, harvest, decrease — signs with a module-level
+  // payer. With only the funder set, the first live open failed with "Payer not
+  // set" after its funding swaps had already landed, stranding the capital.
+  const solana = fs.readFileSync(path.join(ROOT, "src/chain/solana.js"), "utf8");
+  const init = solana.slice(solana.indexOf("export async function initSdk"), solana.indexOf("export function resetConnections"));
+  assert(/setPayerFromBytes\(/.test(init), "initSdk must call setPayerFromBytes");
+  assert(/payer\.address !== \(await wallet\(\)\)\.address/.test(init), "the payer must be checked against the wallet");
+});
+
+test("a failed open unwinds the funding legs it already bought", () => {
+  const w = fs.readFileSync(path.join(ROOT, "src/chain/whirlpool.js"), "utf8");
+  const open = w.slice(w.indexOf("export async function openPosition"), w.indexOf("async function unwindFunding"));
+  const guarded = open.slice(open.indexOf("try {"), open.indexOf("await confirmSignature(signature);"));
+  assert(/action\.callback\(\)/.test(guarded), "building and sending must sit inside the guarded block");
+  assert(/unwindFunding\(funding\)/.test(guarded), "a failure there must unwind the funding legs");
+  // After sending, the outcome is unknown on a timeout — the tokens may be in a
+  // position that landed, so nothing may be unwound from that point.
+  const after = open.slice(open.indexOf("await confirmSignature(signature);"));
+  assert(!/unwindFunding/.test(after), "nothing may be unwound once the transaction has been sent");
+});
+
 test("the agent only touches SOL and what it put in itself", () => {
   // A shared wallet holds tokens that are not the agent's. Funding must never
   // count them as capital, and a close must sell only what the position returned.

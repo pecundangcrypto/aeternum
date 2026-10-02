@@ -12,6 +12,7 @@ import { createSolanaRpc, createKeyPairSignerFromBytes, address, lamports } from
 import {
   setRpc,
   setDefaultFunder,
+  setPayerFromBytes,
   setDefaultSlippageToleranceBps,
   setPriorityFeeSetting,
   setNativeMintWrappingStrategy,
@@ -84,8 +85,15 @@ export async function walletAddress() {
  */
 export async function initSdk() {
   sdkReady ??= (async () => {
-    const payer = await wallet();
     await setRpc(config.chain.rpcUrl);
+    // The SDK's action functions (open, close, harvest, decrease) sign and send
+    // with a module-level payer. Setting only the funder is not enough: every one
+    // of them then fails with "Payer not set" — after any funding swap has
+    // already landed. This is the call that registers it.
+    const payer = await setPayerFromBytes(decodeSecretKey(process.env.WALLET_PRIVATE_KEY ?? ""));
+    if (payer.address !== (await wallet()).address) {
+      throw new Error("SDK payer does not match the configured wallet — refusing to continue");
+    }
     setDefaultFunder(payer);
     setDefaultSlippageToleranceBps(config.chain.slippageBps);
     // Wrapping SOL through an ephemeral account avoids leaving a stranded wSOL
