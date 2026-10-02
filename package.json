@@ -1,0 +1,39 @@
+{
+  "name": "aeternum",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Autonomous Orca Whirlpools liquidity agent for Solana, driven by an LLM decision loop.",
+  "license": "MIT",
+  "main": "index.js",
+  "bin": {
+    "aeternum": "bin/aeternum.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "setup": "node setup.js",
+    "start": "node index.js",
+    "dev": "DRY_RUN=true node index.js",
+    "screen": "node bin/aeternum.js screen",
+    "manage": "node bin/aeternum.js manage",
+    "hivemind:serve": "node hivemind-server/server.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:restart": "pm2 restart aeternum --update-env",
+    "pm2:logs": "pm2 logs aeternum --lines 100",
+    "test": "node test/run.js",
+    "lint:syntax": "find . -path ./node_modules -prune -o -path ./example -prune -o -name '*.js' -print -exec node --check {} ;"
+  },
+  "dependencies": {
+    "@orca-so/tx-sender": "^3.0.0",
+    "@orca-so/whirlpools": "^8.0.1",
+    "@orca-so/whirlpools-client": "^7.0.0",
+    "@orca-so/whirlpools-core": "^3.1.0",
+    "@solana/kit": "^5.0.0",
+    "bs58": "^6.0.0",
+    "dotenv": "^18.0.0",
+    "jsonrepair": "^3.13.0",
+    "node-cron": "^4.6.0",
+    "openai": "^7.23.0"
+  }
+}

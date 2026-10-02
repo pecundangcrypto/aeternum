@@ -1,0 +1,26 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Runtime state (positions, journal, lessons, pool memory, blocklist, signals)
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep
+*.log
+
+# Reference material — this is a third-party repository, not part of this project.
+# Keeping it out of git is deliberate: publishing someone else's source under this
+# repo's licence would be a copyright violation. See CREDITS.md.
+example/
+
+# Local config
+user-config.json
+hivemind-server/hivemind-db.json
+
+node_modules/
+npm-debug.log*
+.DS_Store
+.idea/
+.vscode/
