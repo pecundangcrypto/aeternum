@@ -1,8 +1,35 @@
 {
   "name": "aeternum",
   "version": "1.0.0",
-  "type": "module",
   "description": "Autonomous Orca Whirlpools liquidity agent for Solana, driven by an LLM decision loop.",
+  "keywords": [
+    "solana",
+    "orca",
+    "whirlpools",
+    "orca-whirlpools",
+    "concentrated-liquidity",
+    "clmm",
+    "liquidity-provider",
+    "lp-bot",
+    "defi",
+    "ai-agent",
+    "llm",
+    "trading-bot",
+    "telegram-bot",
+    "jupiter",
+    "trailing-stop",
+    "paper-trading"
+  ],
+  "homepage": "https://github.com/pecundangcrypto/aeternum#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pecundangcrypto/aeternum.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pecundangcrypto/aeternum/issues"
+  },
+  "author": "pecundangcrypto",
+  "type": "module",
   "license": "MIT",
   "main": "index.js",
   "bin": {

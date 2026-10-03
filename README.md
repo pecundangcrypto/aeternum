@@ -1,6 +1,12 @@
-# Aeternum
+# Aeternum — AI liquidity bot for Orca Whirlpools on Solana
 
-**Autonomous Orca Whirlpools liquidity agent for Solana.**
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Node 20+](https://img.shields.io/badge/node-%E2%89%A520-339933)
+![Solana](https://img.shields.io/badge/chain-Solana-9945FF)
+![Orca Whirlpools](https://img.shields.io/badge/DEX-Orca%20Whirlpools-FFD15C)
+
+**An open-source, autonomous concentrated-liquidity (CLMM) LP agent for Orca on
+Solana — AI-picked entries, rule-based exits, Telegram control.**
 
 Aeternum screens Orca Whirlpools continuously, opens concentrated liquidity
 positions sized to each pool's actual volatility, and exits them on mechanical
