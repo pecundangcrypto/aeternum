@@ -20,6 +20,20 @@ Telegram.
 > [CREDITS.md](CREDITS.md). All code here is original and written for Orca; MIT
 > licensed.
 
+## Free ebook — *Liquidity on Autopilot*
+
+<a href="ebook/Liquidity-on-Autopilot.pdf"><img src="ebook/cover.png" alt="Liquidity on Autopilot — ebook cover" width="200" align="right"></a>
+
+A 70-page field manual for concentrated liquidity on Orca, written around this
+project: how a Whirlpool position really behaves, what entering and exiting
+costs, how to choose pools and shape ranges, six complete strategy playbooks with
+configuration, how the exit engine works, and field notes from a live
+deployment — including the mistakes that cost money.
+
+**[Download the PDF](ebook/Liquidity-on-Autopilot.pdf)** — free.
+
+<br clear="right">
+
 ---
 
 ## Why the split matters
