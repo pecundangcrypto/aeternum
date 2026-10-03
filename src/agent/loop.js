@@ -117,6 +117,8 @@ function summarizeResult(name, result) {
         pool: pool.address,
         pair: pool.pair,
         yieldScore: pool.yieldScore,
+        rankScore: pool.rankScore,
+        funding: pool.funding,
         tickSpacing: pool.tickSpacing,
         feeRatePct: pool.feeRatePct,
         feeAprPct: pool.feeApr != null ? Number((pool.feeApr * 100).toFixed(1)) : null,
@@ -144,6 +146,8 @@ function summarizeResult(name, result) {
         status: position.status,
         rangeProgress: position.rangeProgress,
         pnlPct: position.pnlPct,
+        // What the wallet would actually net if closed now — exits are judged on this.
+        netPnlPct: position.netPnlPct ?? null,
         peakPnlPct: position.peakPnlPct,
         trailingActive: position.trailingActive,
         feesUsd: position.feesUsd,

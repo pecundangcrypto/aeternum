@@ -22,6 +22,7 @@ import { resolveTokenRoles } from "../chain/range.js";
 import { checkBlocked } from "../store/blocklist.js";
 import { checkCooldown, getPoolMemory } from "../store/pool-memory.js";
 import { pendingSignals, markSignal } from "../store/signals.js";
+import { estimateFunding } from "./funding.js";
 
 /**
  * Yield Score, 0-100.
@@ -58,6 +59,21 @@ export function yieldScore(pool) {
   const stability = Math.max(0, Math.min(1, (0.5 - move) / 0.45));
 
   return Math.round(fee * 40 + turnover * 25 + depth * 20 + stability * 15);
+}
+
+/**
+ * Yield Score, less the cheapest achievable round-trip funding cost.
+ *
+ * One percentage point of round-trip cost costs ten points of score. A pool that
+ * scores 85 but needs every leg bought (~1.9% on a small position) ranks below
+ * one that scores 76 and can be entered without a swap. The cheapest geometry is
+ * used, because the model is free to choose it.
+ */
+export function rankScore(candidate) {
+  const f = candidate.funding;
+  const costs = [f?.configured?.estRoundTripCostPct, f?.zeroSwap?.estRoundTripCostPct].filter(Number.isFinite);
+  const cheapest = costs.length ? Math.min(...costs) : 0;
+  return Math.round((candidate.yieldScore - cheapest * 10) * 10) / 10;
 }
 
 /** Sub-scores, for explaining a ranking rather than just asserting it. */
@@ -139,7 +155,7 @@ function hardRejectReason(pool) {
  * Token-level checks that need a Jupiter/Orca lookup.
  * Only run on pools that already passed the hard filters.
  */
-async function enrichCandidate(pool) {
+async function enrichCandidate(pool, { deploySol = null } = {}) {
   const roles = resolveTokenRoles(pool, config.screening.quoteMints);
   const s = config.screening;
 
@@ -181,6 +197,9 @@ async function enrichCandidate(pool) {
     pool: {
       ...pool,
       yieldScore: yieldScore(pool),
+      // What getting in and out of this pool costs from a SOL wallet, at the
+      // default geometry and at the one that needs no swap.
+      funding: estimateFunding(pool, { deploySol }),
       scoreBreakdown: scoreBreakdown(pool),
       baseMint: roles.baseMint,
       quoteMint: roles.quoteMint,
@@ -243,7 +262,7 @@ async function resolveSignal(signal) {
  *
  * @returns {{candidates: object[], rejected: object[], signals: object[], scanned: number}}
  */
-export async function screenPools({ limit = null, scanDepth = 150 } = {}) {
+export async function screenPools({ limit = null, scanDepth = 150, deploySol = null } = {}) {
   const s = config.screening;
   const wanted = limit ?? s.candidateLimit;
 
@@ -298,7 +317,7 @@ export async function screenPools({ limit = null, scanDepth = 150 } = {}) {
   const candidates = [];
   for (const pool of passed) {
     if (candidates.length >= wanted) break;
-    const result = await enrichCandidate(pool).catch((err) => ({ pool, rejected: `enrichment failed: ${err.message}` }));
+    const result = await enrichCandidate(pool, { deploySol }).catch((err) => ({ pool, rejected: `enrichment failed: ${err.message}` }));
     if (result.rejected) {
       rejected.push({ pool: pool.address, pair: pool.pair, reason: result.rejected });
       continue;
@@ -306,7 +325,9 @@ export async function screenPools({ limit = null, scanDepth = 150 } = {}) {
     candidates.push(result.pool);
   }
 
-  candidates.sort((left, right) => right.yieldScore - left.yieldScore);
+  // Rank on what the pool can earn *after* what it costs to enter and leave.
+  for (const candidate of candidates) candidate.rankScore = rankScore(candidate);
+  candidates.sort((left, right) => right.rankScore - left.rankScore);
 
   log(
     "screen",
@@ -319,7 +340,7 @@ export async function screenPools({ limit = null, scanDepth = 150 } = {}) {
 /** Full detail for one pool, as the agent's research tool returns it. */
 export async function inspectPool(poolAddress) {
   const pool = await orca.getPool(poolAddress, { ttlMs: 5_000 });
-  const result = await enrichCandidate(pool);
+  const result = await enrichCandidate(pool, { deploySol: null });
   const memory = getPoolMemory(poolAddress);
   const siblings = await orca
     .poolsForPair(pool.tokenMintA, pool.tokenMintB, { limit: 8 })

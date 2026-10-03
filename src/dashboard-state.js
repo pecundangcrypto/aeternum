@@ -16,6 +16,7 @@ import * as hivemind from "./hivemind/client.js";
 import { isPaperMode } from "./chain/solana.js";
 import * as watcher from "./watcher.js";
 import { creatorFeeParams } from "./market/jupiter.js";
+import { headlinePnl } from "./chain/pnl.js";
 
 function round(value, digits = 2) {
   return Number.isFinite(value) ? Number(value.toFixed(digits)) : null;
@@ -129,7 +130,11 @@ export function buildState() {
       rangeProgress: last?.rangeProgress ?? null,
       widthPct: position.widthPct,
 
-      pnlPct: last?.pnlPct ?? position.lastPnlPct ?? null,
+      // Net when measured: it is what the exit rules act on and what reaches the wallet.
+      pnlPct: last ? headlinePnl(last, config.management.pnlBasis).pct : position.lastPnlPct ?? null,
+      positionPnlPct: last?.pnlPct ?? null,
+      pnlBasis: last ? headlinePnl(last, config.management.pnlBasis).basis : "position",
+      entryCostSol: last?.entryCostSol ?? null,
       pnlUsd: last?.pnlUsd ?? null,
       feeContribPct,
       priceContribPct,
@@ -175,7 +180,7 @@ export function buildState() {
   // real effect on the balance and a meaningless one for judging the agent, so the
   // two are reported apart rather than silently summed.
   const strategyPnlSol =
-    open.reduce((sum, position) => sum + (Number(position.last?.pnlSol) || 0), 0) +
+    open.reduce((sum, position) => sum + (Number(headlinePnl(position.last, config.management.pnlBasis).sol) || 0), 0) +
     closed.reduce((sum, record) => sum + (Number(record.pnlSol) || 0), 0);
 
   const equity = account

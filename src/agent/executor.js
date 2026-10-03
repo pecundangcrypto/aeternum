@@ -16,6 +16,7 @@ import { walletBalances, isPaperMode } from "../chain/solana.js";
 import * as paperAccount from "../store/paper-account.js";
 import * as chain from "../chain/whirlpool.js";
 import { valuePosition, isPaper, inOwnBook } from "../chain/valuation.js";
+import { headlinePnl } from "../chain/pnl.js";
 import * as orca from "../market/orca-api.js";
 import * as jupiter from "../market/jupiter.js";
 import * as screener from "../market/screener.js";
@@ -204,6 +205,8 @@ export async function closeAndSettle({ positionMint, reason, closedBy = "agent",
     result = await chain.closePosition({
       positionMint,
       swapToSol: skipSwap ? false : null,
+      // Tokens bought for this position's entry but not deposited go out with it.
+      leftovers: entry?.cost?.leftovers ?? null,
     });
   }
 
@@ -218,8 +221,14 @@ export async function closeAndSettle({ positionMint, reason, closedBy = "agent",
         feesUsd: before?.feesUsd ?? 0,
         feesSol: before?.feesSol ?? 0,
         pnlUsd: before?.pnlUsd ?? null,
-        pnlSol: before?.pnlSol ?? null,
-        pnlPct: before?.pnlPct ?? null,
+        // Net when the entry cost was measured: performance stats, lessons and
+        // threshold evolution all learn from this field, and they should learn
+        // from what reached the wallet.
+        pnlSol: headlinePnl(before, config.management.pnlBasis).sol,
+        pnlPct: before ? headlinePnl(before, config.management.pnlBasis).pct : null,
+        grossPnlPct: before?.pnlPct ?? null,
+        netPnlPct: before?.netPnlPct ?? null,
+        pnlBasis: headlinePnl(before, config.management.pnlBasis).basis,
         rangeEfficiency: ledger.rangeEfficiency(entry),
         exitSnapshot: before
           ? { status: before.status, poolFeeApr: before.poolFeeApr, poolTvlUsd: before.poolTvlUsd }
@@ -293,6 +302,7 @@ export async function openAndTrack(vetted, { reason, risks = [], rejected = [], 
     entryValueUsd: result.entryValueUsd,
     entryValueSol: result.entryValueSol,
     entryValueQuote: result.entryValueQuote,
+    cost: result.cost ?? null,
     entrySnapshot: result.entrySnapshot,
     openTx: result.tx,
     note,
@@ -387,7 +397,10 @@ const HANDLERS = {
   },
 
   async get_candidates(args) {
-    const result = await screener.screenPools({ limit: args?.limit });
+    // The fixed part of the funding cost depends on how big the next position is.
+    const balances = await walletBalances().catch(() => null);
+    const deploySol = balances ? computeDeploySol(balances.sol) : null;
+    const result = await screener.screenPools({ limit: args?.limit, deploySol });
     return {
       count: result.candidates.length,
       scanned: result.scanned,
@@ -570,7 +583,8 @@ const HANDLERS = {
     journal.record({
       kind: "config",
       actor: "agent",
-      summary: `Swapped ${amount} ${info?.symbol ?? inputMint.slice(0, 6)} → ${outputMint.slice(0, 6)}`,
+      // A simulated swap must never read like one that moved funds.
+      summary: `${result.dryRun ? "[dry run] Would swap" : "Swapped"} ${amount} ${info?.symbol ?? inputMint.slice(0, 6)} → ${outputMint.slice(0, 6)}`,
       reason,
       metrics: { inAmount: result.inAmount, outAmount: result.outAmount, priceImpactPct: result.priceImpactPct },
     });

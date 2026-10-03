@@ -36,7 +36,32 @@ Range geometry is described by two numbers:
 skew 1.0 puts the whole range below price: the position is entered entirely in
 the quote asset and accumulates the base asset as price falls, like a resting bid
 ladder. skew 0.0 does the reverse, distributing base into strength. skew 0.5 is
-symmetric and needs both assets up front.`;
+symmetric and needs both assets up front.
+
+## What it costs to get in and out
+
+The wallet holds SOL. Any part of a deposit that is not SOL is bought on the way
+in and sold on the way out, and every one of those swaps pays a fee plus spread.
+Those costs come straight out of the wallet whether or not the PnL figure you
+see includes them, so a pool that is expensive to enter has to earn its way
+past them before the position has really made anything.
+
+Measured on this wallet: a DOGE/USDC position, both legs bought from SOL, cost
+about 1.7% per round trip. That is roughly the whole edge of a typical position.
+
+Cost depends on the pool **and the range** together:
+
+- **X/SOL** (SOL is the quote): a range below the base price (skew near 1) is
+  held entirely in SOL — no swap in, and no swap out while price stays above it.
+- **SOL/USDC-style** (SOL is the base): a range above SOL's price (skew near 0)
+  is held entirely in SOL.
+- **X/USDC** (no SOL at all): every leg is bought. The most expensive shape.
+
+Each candidate carries \`funding\`: the round-trip cost at the default geometry,
+and \`zeroSwap\` — the skew that needs no swap and what it costs. \`rankScore\` is
+the Yield Score less that cost. Prefer the cheaper entry unless the more
+expensive pool's yield clearly pays for the difference, and when you choose a
+skew, say what it costs.`;
 
 function formatUsd(value) {
   if (!Number.isFinite(value)) return "n/a";
@@ -84,7 +109,10 @@ function exitBlock() {
   const m = config.management;
   return [
     "## Exit rules (enforced automatically — not your decision)",
-    `- Stop loss at ${m.stopLossPct}% total PnL`,
+    m.pnlBasis === "net"
+      ? "All percentages are **net**: after entry costs and the expected cost of selling back to SOL."
+      : "Percentages are **position** PnL — the liquidity alone, before entry and exit swap costs. Those costs still come out of the wallet, so a pool that is cheap to enter keeps more of what it earns.",
+    `- Stop loss at ${m.stopLossPct}% net PnL`,
     `- Hard take-profit at ${m.takeProfitPct}%`,
     m.trailingTakeProfit
       ? `- Trailing take-profit: arms once peak PnL reaches ${m.trailingTriggerPct}%, then closes if PnL falls ${m.trailingDropPct}% from the peak`
@@ -174,7 +202,9 @@ How to work:
 3. For the strongest one or two, call \`inspect_pool\`. Check the alternatives at
    other tick spacings; the pool the screener surfaced is often not the best one
    for the pair.
-4. Size the range to the pair's realised 24h move, not to the default.
+4. Size the range to the pair's realised 24h move, not to the default — and set
+   the skew with the funding cost in mind: the zero-swap skew is often available
+   and costs nothing to enter.
 5. Open at most one position per cycle, or call \`record_no_action\`.
 
 There are two ways to get this wrong, and they cost about the same:

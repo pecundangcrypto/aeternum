@@ -223,6 +223,11 @@ export const config = {
     // SOL — the asset every position is funded from — so capital does not drift
     // into USDC or a base token one exit at a time. Reads the old name too.
     autoSwapToSol: bool(u.autoSwapToSol ?? u.autoSwapToQuote, true),
+    // Which PnL drives the exit rules and leads the displays:
+    //   "position" — the liquidity alone; matches what Orca's own page shows
+    //   "net"      — after entry costs and the expected cost of selling back to SOL
+    // Net is always measured and recorded for live positions either way.
+    pnlBasis: u.pnlBasis === "net" ? "net" : "position",
     // Cool off a pool after repeated bad exits so the screener stops re-entering.
     reentryCooldownHours: num(u.reentryCooldownHours, 12),
     reentryCooldownLosses: num(u.reentryCooldownLosses, 2),
@@ -345,7 +350,7 @@ export const TUNABLE_KEYS = new Set([
   "deploySol", "positionSizePct", "gasReserveSol", "minWalletSolToOpen",
   "takeProfitPct", "stopLossPct", "trailingTakeProfit", "trailingTriggerPct",
   "trailingDropPct", "confirmTicks", "outOfRangeWaitMinutes", "maxHoldHours",
-  "minFeeAprToHold", "yieldGraceMinutes", "autoHarvestFeesUsd", "autoSwapToSol",
+  "minFeeAprToHold", "yieldGraceMinutes", "autoHarvestFeesUsd", "autoSwapToSol", "pnlBasis",
   "reentryCooldownHours", "reentryCooldownLosses", "solMode",
   "manageIntervalMin", "screenIntervalMin", "watcherIntervalSec", "watcherEnabled",
   "llmBaseUrl", "llmApiKey",
@@ -362,7 +367,7 @@ const BOOL_KEYS = new Set([
 
 const STRING_KEYS = new Set([
   "rangePreset", "signalMode", "screenModel", "manageModel", "chatModel", "hivemindPullMode",
-  "llmBaseUrl", "llmApiKey",
+  "llmBaseUrl", "llmApiKey", "pnlBasis",
 ]);
 
 /** Coerce a user/LLM supplied value to the type the key expects. */
@@ -390,6 +395,9 @@ export function coerceTunable(key, raw) {
         throw new Error("llmBaseUrl should be the API root (usually ending in /v1), not the /chat/completions path");
       }
       return value.replace(/\/$/, "");
+    }
+    if (key === "pnlBasis" && !["position", "net"].includes(value)) {
+      throw new Error('pnlBasis must be "position" or "net"');
     }
     if (key === "hivemindPullMode" && !["auto", "manual"].includes(value)) {
       throw new Error('hivemindPullMode must be "auto" or "manual"');

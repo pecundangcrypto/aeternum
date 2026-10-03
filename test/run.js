@@ -480,6 +480,66 @@ test("accrued fees trigger a harvest rather than a close", () => {
   assertEqual(result.action, "harvest", "large uncollected fees should harvest");
 });
 
+test("by default exits use position PnL — the figure Orca shows", () => {
+  const restore = config.management.pnlBasis;
+  config.management.pnlBasis = "position";
+  try {
+    const mint = seedPosition();
+    ledger.evaluateExit(mint, live({ pnlPct: 0.1, netPnlPct: -1.7 }));
+    assertClose(ledger.getPosition(mint).lastPnlPct, 0.1, 1e-9, "position PnL leads, net is ignored");
+  } finally {
+    config.management.pnlBasis = restore;
+  }
+});
+
+test("with pnlBasis net, exits are judged on net PnL", () => {
+  // Gross +3% that is a net loss after costs must not arm the trailing stop or
+  // read as a gain; a net loss deep enough must trip the stop even when gross
+  // looks harmless.
+  const restoreBasis = config.management.pnlBasis;
+  config.management.pnlBasis = "net";
+  try {
+  const mint = seedPosition();
+  ledger.evaluateExit(mint, live({ pnlPct: 3, netPnlPct: -0.5 }));
+  ledger.evaluateExit(mint, live({ pnlPct: 3, netPnlPct: -0.5 }));
+  assert(!ledger.getPosition(mint).trailingActive, "a net loss must not arm the trailing stop");
+  assertClose(ledger.getPosition(mint).lastPnlPct, -0.5, 1e-9, "the recorded PnL is the net one");
+
+  const stopped = seedPosition();
+  ledger.evaluateExit(stopped, live({ pnlPct: -1, netPnlPct: -30 }));
+  const result = ledger.evaluateExit(stopped, live({ pnlPct: -1, netPnlPct: -30 }));
+  assertEqual(result.signal, "stop_loss", "the stop must use the net figure");
+
+  const legacy = seedPosition();
+  const fallback = ledger.evaluateExit(legacy, live({ pnlPct: 1.2 }));
+  assert(/1\.20%/.test(fallback.reason), "without a net figure it falls back to position PnL");
+  } finally {
+    config.management.pnlBasis = restoreBasis;
+  }
+});
+
+test("net PnL includes the position's own entry leftovers", async () => {
+  const { netPnlFor } = await import("../src/chain/whirlpool.js");
+  const SOLM = "So11111111111111111111111111111111111111112";
+  const restore = { ...config.creatorFee };
+  Object.assign(config.creatorFee, { account: null, bps: 0 });
+  try {
+    const base = {
+      entry: { cost: { solSpentLamports: "1000000000", rentBackLamports: "0", leftovers: {} } },
+      legs: [{ mint: "TOKEN", amountUi: 100, priceUsd: 1 }],
+      decimalsByMint: { TOKEN: 6 },
+      solPrice: 100,
+    };
+    const without = netPnlFor(base);
+    const withLeft = netPnlFor({ ...base, entry: { cost: { ...base.entry.cost, leftovers: { TOKEN: "2000000" } } } });
+    assert(withLeft.netPnlSol > without.netPnlSol, "2 leftover tokens must add to proceeds");
+    assertClose(withLeft.netPnlSol - without.netPnlSol, 0.02 * (1 - 0.0012), 1e-9, "valued like any other leg, net of exit cost");
+    assertEqual(netPnlFor({ ...base, entry: {} }).netPnlPct, null, "no measured cost, no net figure");
+  } finally {
+    Object.assign(config.creatorFee, restore);
+  }
+});
+
 test("take-profit fires above the ceiling", () => {
   const mint = seedPosition();
   const target = config.management.takeProfitPct + 5;
@@ -495,6 +555,47 @@ test("closing writes a record and removes it from the open set", () => {
   assert(record, "record should exist");
   assertEqual(record.pnlPct, 3.5, "pnl carried through");
   assertEqual(ledger.getPosition(mint), null, "should no longer be open");
+});
+
+// ─── Funding cost ──────────────────────────────────────────────────────────
+
+process.stdout.write("\nFunding cost\n");
+const funding = await import("../src/market/funding.js");
+const core = await import("@orca-so/whirlpools-core");
+
+function syntheticPool({ mintA, mintB, decA, decB, price }) {
+  return {
+    tokenMintA: mintA, tokenMintB: mintB,
+    tokenA: { symbol: "A", decimals: decA }, tokenB: { symbol: "B", decimals: decB },
+    price, sqrtPrice: core.priceToSqrtPrice(price, decA, decB).toString(),
+    tickSpacing: 64, priceDelta24h: 0.03, volumeTvlRatio: 2,
+  };
+}
+
+test("an X/SOL range below price needs no swap; X/USDC needs every leg bought", () => {
+  const xSol = syntheticPool({ mintA: MEME, mintB: SOL, decA: 6, decB: 9, price: 0.001 });
+  const rolesXSol = resolveTokenRoles(xSol, [SOL, USDC]);
+  assertEqual(funding.zeroSwapSkew(rolesXSol), 1, "SOL as quote: the range goes below price");
+  assertClose(funding.nonSolShare(xSol, rolesXSol, { widthPct: 10, skew: 1 }), 0, 1e-6, "held entirely in SOL");
+  assert(funding.nonSolShare(xSol, rolesXSol, { widthPct: 10, skew: 0.5 }) > 0.3, "a symmetric range needs the base bought");
+
+  const solUsdc = syntheticPool({ mintA: SOL, mintB: USDC, decA: 9, decB: 6, price: 120 });
+  const rolesSolUsdc = resolveTokenRoles(solUsdc, [SOL, USDC]);
+  assertEqual(funding.zeroSwapSkew(rolesSolUsdc), 0, "SOL as base: the range goes above price");
+  assertClose(funding.nonSolShare(solUsdc, rolesSolUsdc, { widthPct: 10, skew: 0 }), 0, 1e-6, "held entirely in SOL");
+
+  const xUsdc = syntheticPool({ mintA: MEME, mintB: USDC, decA: 6, decB: 6, price: 0.5 });
+  const rolesXUsdc = resolveTokenRoles(xUsdc, [SOL, USDC]);
+  assertEqual(funding.zeroSwapSkew(rolesXUsdc), null, "no SOL in the pool, no free geometry");
+  assertClose(funding.nonSolShare(xUsdc, rolesXUsdc, { widthPct: 10, skew: 0.5 }), 1, 1e-6, "every leg bought");
+});
+
+test("ranking puts a cheap entry ahead of a slightly better but expensive one", async () => {
+  const { rankScore } = await import("../src/market/screener.js");
+  const expensive = { yieldScore: 85, funding: { configured: { estRoundTripCostPct: 1.9 }, zeroSwap: null } };
+  const cheap = { yieldScore: 78, funding: { configured: { estRoundTripCostPct: 1.8 }, zeroSwap: { estRoundTripCostPct: 0.2 } } };
+  assert(rankScore(cheap) > rankScore(expensive), `${rankScore(cheap)} should beat ${rankScore(expensive)}`);
+  assertEqual(rankScore({ yieldScore: 60, funding: null }), 60, "no funding data leaves the score alone");
 });
 
 // ─── Telegram keyboard ─────────────────────────────────────────────────────
@@ -879,8 +980,43 @@ test("PnL is unavailable rather than wrong when the entry basis is missing", () 
 test("no oracle price can enter the PnL path", () => {
   // The whole point of the quote basis: mixing price sources injected 0.17% of
   // phantom loss on a real position. Nothing here may reach for USD.
+  // Position PnL only — net PnL crosses from the position's assets into SOL and
+  // converts at market prices on purpose.
   const src = fs.readFileSync(path.join(ROOT, "src/chain/pnl.js"), "utf8");
-  assert(!/usd|jupiter|oracle/i.test(src.replace(/\/\*[\s\S]*?\*\//g, "")), "pnl.js must not reference USD or an oracle outside comments");
+  const positionPnl = src.slice(src.indexOf("export function quoteValue"), src.indexOf("/**\n * Net PnL in SOL"));
+  assert(positionPnl.length > 100, "could not isolate the position-PnL functions");
+  assert(!/usd|jupiter|oracle/i.test(positionPnl.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")), "position PnL must not reference USD or an oracle");
+});
+
+test("net PnL counts what it cost to get in and what it will cost to get out", async () => {
+  const { computeNetPnl } = await import("../src/chain/pnl.js");
+  const SOLM = "So11111111111111111111111111111111111111112";
+  // Spent 1 SOL (0.01 of it refundable rent). Position now worth exactly 0.99 SOL
+  // in a token priced at $1 with SOL at $100, i.e. 99 tokens.
+  const flat = computeNetPnl({
+    legs: [{ mint: "TOKEN", amountUi: 99, priceUsd: 1 }],
+    solPriceUsd: 100, exitCostRate: 0, rentBackSol: 0.01, solSpentSol: 1, solMint: SOLM,
+  });
+  assertClose(flat.netPnlSol, 0, 1e-9, "no exit cost, rent returned: break-even");
+
+  const withExit = computeNetPnl({
+    legs: [{ mint: "TOKEN", amountUi: 99, priceUsd: 1 }],
+    solPriceUsd: 100, exitCostRate: 0.006, rentBackSol: 0.01, solSpentSol: 1, solMint: SOLM,
+  });
+  assertClose(withExit.netPnlSol, -0.00594, 1e-9, "selling the token back costs 0.6% of it");
+  assertClose(withExit.netPnlPct, (-0.00594 / 0.99) * 100, 1e-6, "pct is of committed capital, not of rent");
+
+  const solLeg = computeNetPnl({
+    legs: [{ mint: SOLM, amountUi: 0.5 }, { mint: "TOKEN", amountUi: 49, priceUsd: 1 }],
+    solPriceUsd: 100, exitCostRate: 0.01, rentBackSol: 0.01, solSpentSol: 1, solMint: SOLM,
+  });
+  assertClose(solLeg.proceedsSol, 0.5 + 0.49 * 0.99, 1e-9, "SOL legs pay no exit cost");
+
+  const unknown = computeNetPnl({
+    legs: [{ mint: "TOKEN", amountUi: 99, priceUsd: null }],
+    solPriceUsd: 100, exitCostRate: 0, rentBackSol: 0, solSpentSol: 1, solMint: SOLM,
+  });
+  assertEqual(unknown.netPnlPct, null, "an unpriceable leg must yield no figure, not a wrong one");
 });
 
 // ─── Paper mode ────────────────────────────────────────────────────────────

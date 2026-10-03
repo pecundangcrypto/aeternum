@@ -49,7 +49,7 @@ import { log } from "../logger.js";
 import { rpc, watcherRpc, wallet, walletAddress, initSdk, LAMPORTS_PER_SOL } from "./solana.js";
 import { resolveTokenRoles, buildRange, depositSplit, rangePosition, basePrice } from "./range.js";
 import { quotePaperLiquidity } from "./paper.js";
-import { quoteValue, computePnl } from "./pnl.js";
+import { quoteValue, computePnl, computeNetPnl } from "./pnl.js";
 import * as orca from "../market/orca-api.js";
 import * as jupiter from "../market/jupiter.js";
 
@@ -157,6 +157,17 @@ export async function positionSnapshot(positionMint, { entry = null, fast = fals
   const hasEntry = Number.isFinite(entryValueQuote) && entryValueQuote > 0;
 
   const minutesHeld = entry?.openedAt ? Math.max(1, (Date.now() - new Date(entry.openedAt).getTime()) / 60_000) : null;
+
+  // ── Net PnL, in SOL: what closing now and selling back would really leave ──
+  const net = netPnlFor({
+    entry,
+    legs: [
+      { mint: String(pool.data.tokenMintA), amountUi: amountA + feeA, priceUsd: priceA },
+      { mint: String(pool.data.tokenMintB), amountUi: amountB + feeB, priceUsd: priceB },
+    ],
+    decimalsByMint: { [String(pool.data.tokenMintA)]: decimalsA, [String(pool.data.tokenMintB)]: decimalsB },
+    solPrice,
+  });
   // Annualised yield on deployed capital from fees alone, also in quote terms.
   const feeApr =
     hasEntry && feesQuote != null && minutesHeld
@@ -209,6 +220,10 @@ export async function positionSnapshot(positionMint, { entry = null, fast = fals
     entryValueUsd: entry?.entryValueUsd ?? null,
     pnlUsd: pnlQuote != null && quotePriceUsd ? round(pnlQuote * quotePriceUsd, 4) : null,
     pnlSol: pnlQuote != null && quotePriceUsd && solPrice ? round((pnlQuote * quotePriceUsd) / solPrice, 6) : null,
+    // After entry and expected exit costs. The exit rules use this when present.
+    netPnlPct: net.netPnlPct,
+    netPnlSol: net.netPnlSol,
+    entryCostSol: net.entryCostSol,
     feeApr,
     minutesHeld: minutesHeld != null ? Math.round(minutesHeld) : null,
 
@@ -403,6 +418,11 @@ export async function openPosition({ pool, deploySol, widthPct, skew, dryRun = c
   const targetA = (budgetUsd * split.ratioA) / priceA;
   const targetB = (budgetUsd * split.ratioB) / priceB;
 
+  // Live only: the wallet's state before anything is spent, so the real cost of
+  // this position can be measured rather than estimated.
+  const legMints = [String(state.tokenMintA), String(state.tokenMintB)].filter((mint) => mint !== MINTS.SOL);
+  const before = dryRun ? null : await walletSnapshot(legMints);
+
   const funding = [];
   for (const [mint, targetUi, decimals] of [
     [String(state.tokenMintA), targetA, roles.decimalsA],
@@ -522,12 +542,109 @@ export async function openPosition({ pool, deploySol, widthPct, skew, dryRun = c
   await confirmSignature(signature);
 
   log("chain", `Opened ${meta.pair} position ${action.positionMint} (${signature})`);
+  const cost = await measureEntryCost({ before, legMints, signature }).catch((err) => {
+    log("chain_warn", `Could not measure the entry cost of ${action.positionMint}: ${err.message} — net PnL unavailable`);
+    return null;
+  });
   return {
     ...plan,
     dryRun: false,
     positionMint: String(action.positionMint),
     initializationCostLamports: action.initializationCost?.toString?.() ?? null,
     tx: signature,
+    cost,
+  };
+}
+
+// Spread assumed on each exit swap, on top of the Jupiter fee Ultra reports.
+const EXIT_SPREAD_RATE = 0.001;
+
+/**
+ * Net PnL for a position that has a measured entry cost; nulls otherwise
+ * (paper positions, and anything opened before costs were recorded).
+ */
+export function netPnlFor({ entry, legs, decimalsByMint, solPrice }) {
+  const cost = entry?.cost;
+  if (!cost?.solSpentLamports) return { netPnlPct: null, netPnlSol: null, entryCostSol: null };
+
+  // Leftover tokens from the entry belong to this position and go out with it.
+  const withLeftovers = legs.map((leg) => ({ ...leg }));
+  for (const [mint, raw] of Object.entries(cost.leftovers ?? {})) {
+    const decimals = decimalsByMint[mint];
+    if (decimals == null) continue;
+    const leg = withLeftovers.find((item) => item.mint === mint);
+    if (leg) leg.amountUi += toUi(BigInt(raw), decimals);
+  }
+
+  const fee = jupiter.creatorFeeParams();
+  const exitCostRate = (fee.enabled ? fee.bps / 10_000 : 0.0002) + EXIT_SPREAD_RATE;
+  const solSpentSol = Number(BigInt(cost.solSpentLamports)) / LAMPORTS_PER_SOL;
+  const rentBackSol = Number(BigInt(cost.rentBackLamports ?? 0)) / LAMPORTS_PER_SOL;
+
+  const result = computeNetPnl({
+    legs: withLeftovers,
+    solPriceUsd: solPrice,
+    exitCostRate,
+    rentBackSol,
+    solSpentSol,
+    solMint: MINTS.SOL,
+  });
+  return { netPnlPct: result.netPnlPct, netPnlSol: result.netPnlSol, entryCostSol: round(solSpentSol - rentBackSol, 9) };
+}
+
+/** SOL and leg-token balances, read at "confirmed". */
+async function walletSnapshot(legMints) {
+  const owner = String(await walletAddress());
+  const { value: lamports } = await rpc().getBalance(address(owner), { commitment: "confirmed" }).send();
+  const tokens = {};
+  for (const mint of legMints) tokens[mint] = await rawTokenBalance(owner, mint);
+  return { lamports: BigInt(lamports), tokens };
+}
+
+// Rent of the three accounts an Orca open creates (position, position mint and
+// its token account), as measured on mainnet. Used only if the transaction
+// itself cannot be read back; it is refunded when the position closes.
+const FALLBACK_POSITION_RENT_LAMPORTS = 6_849_400n;
+
+/**
+ * What opening this position really cost, measured from the wallet.
+ *
+ *   solSpent    every lamport that left the wallet: funding swaps, swap fees,
+ *               rent, tick-array growth, transaction fees
+ *   rentBack    the part of that refunded on close — accounts this transaction
+ *               created from nothing. Growth of a pool's shared tick array is not
+ *               counted: it does not come back to us.
+ *   leftovers   tokens bought for the deposit but not used by it, sold back to
+ *               SOL when the position closes
+ */
+async function measureEntryCost({ before, legMints, signature }) {
+  if (!before) return null;
+  const after = await walletSnapshot(legMints);
+
+  let rentBack = null;
+  for (let attempt = 0; attempt < 5 && rentBack == null; attempt += 1) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const tx = await rpc()
+      .getTransaction(signature, { maxSupportedTransactionVersion: 0, encoding: "json", commitment: "confirmed" })
+      .send()
+      .catch(() => null);
+    if (!tx?.meta) continue;
+    const pre = tx.meta.preBalances.map(BigInt);
+    const post = tx.meta.postBalances.map(BigInt);
+    rentBack = post.reduce((sum, value, i) => (pre[i] === 0n && value > 0n ? sum + value : sum), 0n);
+  }
+
+  const leftovers = {};
+  for (const mint of legMints) {
+    const extra = after.tokens[mint] - before.tokens[mint];
+    if (extra > 0n) leftovers[mint] = extra.toString();
+  }
+
+  return {
+    solSpentLamports: (before.lamports - after.lamports).toString(),
+    rentBackLamports: (rentBack ?? FALLBACK_POSITION_RENT_LAMPORTS).toString(),
+    rentMeasured: rentBack != null,
+    leftovers,
   };
 }
 
@@ -562,7 +679,7 @@ function describeUnwind(results) {
  * position NFT. Optionally sells what the position returned back to SOL so the exit is
  * actually realised rather than left as a directional bag.
  */
-export async function closePosition({ positionMint, swapToSol = null, dryRun = config.dryRun }) {
+export async function closePosition({ positionMint, swapToSol = null, leftovers = null, dryRun = config.dryRun }) {
   const snapshot = await positionSnapshot(positionMint).catch(() => null);
 
   if (dryRun) {
@@ -590,7 +707,7 @@ export async function closePosition({ positionMint, swapToSol = null, dryRun = c
   let swap = null;
   const shouldSwap = swapToSol ?? config.management.autoSwapToSol;
   if (shouldSwap && legs.length) {
-    swap = await swapProceedsToSol({ owner, legs, before }).catch((err) => {
+    swap = await swapProceedsToSol({ owner, legs, before, leftovers }).catch((err) => {
       log("chain_warn", `Swapping close proceeds back to SOL failed: ${err.message}`);
       return { error: err.message };
     });
@@ -622,7 +739,7 @@ export async function closePosition({ positionMint, swapToSol = null, dryRun = c
  * a few times, because Jupiter routes for thin tokens fail transiently and an
  * unsold leg silently turns an LP exit into a spot bet.
  */
-async function swapProceedsToSol({ owner, legs, before, attempts = 3 }) {
+async function swapProceedsToSol({ owner, legs, before, leftovers = null, attempts = 3 }) {
   const results = [];
   for (const mint of legs) {
     if (before[mint] == null) {
@@ -638,6 +755,10 @@ async function swapProceedsToSol({ owner, legs, before, attempts = 3 }) {
       if (read) await new Promise((resolve) => setTimeout(resolve, 2_000));
       delta = (await rawTokenBalance(owner, mint)) - before[mint];
     }
+    // Plus this position's own entry leftovers, which sat in the wallet before the
+    // close — capped by what the wallet held then, so nothing else is touched.
+    const leftover = BigInt(leftovers?.[mint] ?? "0");
+    if (leftover > 0n) delta += leftover < before[mint] ? leftover : before[mint];
     if (delta <= 0n) {
       results.push({ mint, skipped: "close returned none of this token" });
       continue;

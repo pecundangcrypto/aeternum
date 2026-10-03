@@ -15,6 +15,7 @@ import { createStore, trimList } from "./json-store.js";
 import { dataPath } from "../paths.js";
 import { config } from "../config.js";
 import { log } from "../logger.js";
+import { headlinePnl } from "../chain/pnl.js";
 
 const store = createStore(dataPath("positions.json"), {
   positions: {},
@@ -75,6 +76,8 @@ export function openPosition(entry) {
       note: clean(entry.note),
       // Present only for paper positions: the simulated liquidity and accrued fees.
       paper: entry.paper ?? null,
+      // Live only: what opening it really cost, measured from the wallet. Drives net PnL.
+      cost: entry.cost ?? null,
 
       // Exit-engine state.
       peakPnlPct: 0,
@@ -171,6 +174,9 @@ export function recordClose(positionMint, outcome) {
       pnlUsd: outcome.pnlUsd ?? null,
       pnlSol: outcome.pnlSol ?? null,
       pnlPct: outcome.pnlPct ?? null,
+      grossPnlPct: outcome.grossPnlPct ?? null,
+      netPnlPct: outcome.netPnlPct ?? null,
+      pnlBasis: outcome.pnlBasis ?? "position",
       closeReason: clean(outcome.reason, 300) ?? "manual",
       closedBy: outcome.closedBy ?? "agent",
       closeTx: outcome.tx ?? null,
@@ -312,7 +318,10 @@ export function evaluateExit(positionMint, live) {
   if (!entry) return { action: "hold", reason: "not tracked" };
 
   const mgmt = config.management;
-  const pnlPct = Number(live.pnlPct);
+  // Net PnL — after what it cost to get in and will cost to get out — when the
+  // entry cost was measured. Judging exits on the gross figure would let a
+  // trailing stop "take profit" at a level that is a loss in the wallet.
+  const pnlPct = headlinePnl(live, config.management.pnlBasis).pct;
   const hasPnl = Number.isFinite(pnlPct);
   const heldMinutes = minutesSince(entry.openedAt);
 

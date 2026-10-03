@@ -105,6 +105,17 @@ export function buildRange({ poolPrice, tickSpacing, decimalsA, decimalsB, width
   let tickLower = clampTick(getInitializableTickIndex(priceToTickIndex(rawLower, decimalsA, decimalsB), tickSpacing, false));
   let tickUpper = clampTick(getInitializableTickIndex(priceToTickIndex(rawUpper, decimalsA, decimalsB), tickSpacing, true));
 
+  // A one-sided range must stay entirely on its side of the price. Widening the
+  // bound that touches the price would push it across by up to one tick spacing
+  // and turn a "no swap needed" entry into one that needs a few percent of the
+  // other asset bought — swap fee and all. Round that bound away from the price.
+  const currentTick = priceToTickIndex(poolPrice, decimalsA, decimalsB);
+  if (skewBelow >= 1) {
+    tickUpper = clampTick(getInitializableTickIndex(currentTick, tickSpacing, false));
+  } else if (skewBelow <= 0) {
+    tickLower = clampTick(getInitializableTickIndex(currentTick + 1, tickSpacing, true));
+  }
+
   // A width narrower than one tick spacing snaps to a zero-width range, which
   // the program rejects. Widen by the minimum the grid allows.
   if (tickUpper <= tickLower) {

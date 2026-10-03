@@ -272,6 +272,8 @@ const PAGE = String.raw`<!doctype html>
         <dd>The share of the hold the price actually spent inside the range. Below 50% usually means the range was sized wrong from the start.</dd>
         <dt>SOL price effect</dt>
         <dd>The account is funded in SOL, but a position holds other assets. If SOL falls while your position sits in USDC, the balance rises in SOL terms without the agent having done anything. The headline deliberately excludes it so it is not mistaken for skill.</dd>
+        <dt>Net return</dt>
+        <dd>What closing now would actually leave in your wallet, in SOL: the position's value after the swap fees to sell it back, plus the rent that comes back, minus every lamport the entry took — funding swaps, fees, rent that does not return. Exits are judged on this. "Position" return is the liquidity alone, which is what Orca's own page shows.</dd>
         <dt>Trailing stop</dt>
         <dd>Once a position is up enough, the agent remembers the best level reached and closes if the return falls back by a set amount — locking in part of the gain instead of watching it evaporate.</dd>
       </dl>
@@ -433,10 +435,14 @@ function positions(s) {
       + '<div class="rnow">now <b>' + price(now) + "</b>" + (Number.isFinite(en) ? ' <span class="muted">· in at ' + price(en) + "</span>" : "") + "</div></div>"
 
       + "<div><div class=\"stats\">"
-      + '<div class="stat"><div class="k">Return</div><div class="v ' + dir(p.pnlPct) + '">' + pct(p.pnlPct) + "</div></div>"
+      + '<div class="stat"><div class="k">' + (p.pnlBasis === "net" ? "Net return" : "Return") + '</div><div class="v ' + dir(p.pnlPct) + '">' + pct(p.pnlPct) + "</div></div>"
       + '<div class="stat"><div class="k">From fees</div><div class="v ' + dir(p.feeContribPct) + '">' + pct(p.feeContribPct) + "</div></div>"
       + '<div class="stat"><div class="k">From price</div><div class="v ' + dir(p.priceContribPct) + '">' + pct(p.priceContribPct) + "</div></div>"
       + "</div>"
+      + (p.pnlBasis === "net"
+        ? '<div class="meta">position ' + pct(p.positionPnlPct) + " before costs · entry cost "
+          + fx(p.entryCostSol, 4) + " SOL · fees and price below are the position's own</div>"
+        : "")
       + '<div class="meta">fee APR ' + (p.feeAprPct !== null ? fx(p.feeAprPct, 0) + "%" : "—")
       + " · in range " + (p.timeInRangePct !== null ? p.timeInRangePct + "%" : "—")
       + " · held " + dur(p.minutesHeld) + "</div></div></div>"

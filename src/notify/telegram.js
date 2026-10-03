@@ -319,10 +319,15 @@ async function renderPositions() {
       "",
       `<b>${position.index}. ${escapeHtml(position.pair ?? position.positionMint.slice(0, 8))}</b>${position.trailingActive ? " 🔒" : ""}`,
       `<code>${rangeBar(position.rangeProgress)}</code> ${position.inRange ? "in range" : escapeHtml(String(position.status).replace("price", "").toLowerCase())}`,
-      `PnL <b>${fmtPct(position.pnlPct)}</b> ${pnl} | peak ${fmtPct(position.peakPnlPct)}`,
+      config.management.pnlBasis === "net" && position.netPnlPct != null
+        ? `Net <b>${fmtPct(position.netPnlPct)}</b> (${position.netPnlSol > 0 ? "+" : ""}${Number(position.netPnlSol).toFixed(4)} SOL) | position ${fmtPct(position.pnlPct)} | peak ${fmtPct(position.peakPnlPct)}`
+        : `PnL <b>${fmtPct(position.pnlPct)}</b> ${pnl} | peak ${fmtPct(position.peakPnlPct)}`,
       `Fees ${fmtMoney(position.feesUsd)} | fee APR ${position.feeApr != null ? `${(position.feeApr * 100).toFixed(0)}%` : "n/a"} | held ${fmtDuration(position.minutesHeld)}`,
     );
     if (position.note) lines.push(`<i>${escapeHtml(position.note)}</i>`);
+  }
+  if (config.management.pnlBasis === "net") {
+    lines.push("", "<i>Net = after entry costs and the expected cost of selling back to SOL; exits are judged on it. Position = the liquidity alone, as Orca shows it.</i>");
   }
   lines.push("", "<i>🔒 = trailing take-profit armed. Tap a button below to close.</i>");
   return lines.join("\n");
