@@ -81,7 +81,7 @@ test(`${files.length} source files parse`, () => {
 // ─── Range geometry ─────────────────────────────────────────────────────────
 
 process.stdout.write("\nRange geometry\n");
-const { buildRange, resolveTokenRoles, basePrice, depositSplit } = await import("../src/chain/range.js");
+const { buildRange, resolveTokenRoles, basePrice, depositSplit, valuationQuotes } = await import("../src/chain/range.js");
 
 const SOL = "So11111111111111111111111111111111111111112";
 const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -122,6 +122,16 @@ test("a pool with no configured quote asset is rejected", () => {
     [SOL, USDC],
   );
   assert(!roles.supported, "should be unsupported");
+});
+
+test("an open X/USDC position still values after screening narrows to SOL", () => {
+  const pool = { tokenMintA: MEME, tokenMintB: USDC, tokenA: { symbol: "MEME", decimals: 8 }, tokenB: { symbol: "USDC", decimals: 6 } };
+  assert(!resolveTokenRoles(pool, [SOL]).supported, "screening with SOL only should not enter it");
+  const withEntry = resolveTokenRoles(pool, valuationQuotes({ quoteMint: USDC }, [SOL]));
+  assert(withEntry.supported, "ledger quote should be honoured");
+  assertEqual(withEntry.decimalsA, 8, "real decimals, not a guess");
+  const withoutEntry = resolveTokenRoles(pool, valuationQuotes(null, [SOL]));
+  assertEqual(withoutEntry.quoteMint, USDC, "falls back to every known quote");
 });
 
 test("skew 1 puts the whole range below price when base is tokenA", () => {

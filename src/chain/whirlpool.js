@@ -47,7 +47,7 @@ import {
 import { config, MINTS } from "../config.js";
 import { log } from "../logger.js";
 import { rpc, watcherRpc, wallet, walletAddress, initSdk, LAMPORTS_PER_SOL } from "./solana.js";
-import { resolveTokenRoles, buildRange, depositSplit, rangePosition, basePrice } from "./range.js";
+import { resolveTokenRoles, valuationQuotes, buildRange, depositSplit, rangePosition, basePrice } from "./range.js";
 import { quotePaperLiquidity } from "./paper.js";
 import { quoteValue, computePnl, computeNetPnl } from "./pnl.js";
 import * as orca from "../market/orca-api.js";
@@ -110,7 +110,7 @@ export async function positionSnapshot(positionMint, { entry = null, fast = fals
   // Pool metadata (decimals, symbols, TVL/fee stats) comes from the API; it is
   // cached and not on the hot path.
   const meta = await orca.getPool(String(poolAddress), { ttlMs: fast ? 60_000 : 20_000 }).catch(() => null);
-  const roles = meta ? resolveTokenRoles(meta, config.screening.quoteMints) : { supported: false };
+  const roles = meta ? resolveTokenRoles(meta, valuationQuotes(entry, config.screening.quoteMints)) : { supported: false };
   const decimalsA = roles.supported ? roles.decimalsA : 9;
   const decimalsB = roles.supported ? roles.decimalsB : 9;
 

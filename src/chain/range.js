@@ -71,6 +71,21 @@ export function resolveTokenRoles(pool, quoteMints) {
   };
 }
 
+/**
+ * Quote candidates for valuing a position that already exists.
+ *
+ * `quoteMints` decides what the screener may enter, not how an open position is
+ * priced. Narrowing it — to SOL only, say — would otherwise leave an existing
+ * X/USDC position with no recognised quote, and valuation would fall back to
+ * guessed decimals: wrong amounts, wrong PnL, and a stop loss that can fire on a
+ * healthy position. The ledger remembers the quote the position was opened in;
+ * without it, every known quote asset is accepted.
+ */
+export function valuationQuotes(entry, configured = []) {
+  if (entry?.quoteMint) return [entry.quoteMint];
+  return [...new Set([...configured, ...QUOTE_PRIORITY])];
+}
+
 /** Price of the base asset in quote units, derived from the pool price. */
 export function basePrice(poolPrice, baseIsA) {
   if (!Number.isFinite(poolPrice) || poolPrice <= 0) return null;

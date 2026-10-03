@@ -38,7 +38,7 @@ import { config } from "../config.js";
 import { quoteValue, computePnl } from "./pnl.js";
 import { log } from "../logger.js";
 import { rpc, watcherRpc } from "./solana.js";
-import { rangePosition, basePrice, resolveTokenRoles } from "./range.js";
+import { rangePosition, basePrice, resolveTokenRoles, valuationQuotes } from "./range.js";
 import * as orca from "../market/orca-api.js";
 import * as jupiter from "../market/jupiter.js";
 import { updatePosition } from "../store/positions.js";
@@ -130,7 +130,7 @@ export async function paperSnapshot(entry, { fast = false, persist = false } = {
   ]);
   const state = pool.data;
 
-  const roles = meta ? resolveTokenRoles(meta, config.screening.quoteMints) : { supported: false };
+  const roles = meta ? resolveTokenRoles(meta, valuationQuotes(entry, config.screening.quoteMints)) : { supported: false };
   const decimalsA = roles.supported ? roles.decimalsA : 9;
   const decimalsB = roles.supported ? roles.decimalsB : 9;
 
